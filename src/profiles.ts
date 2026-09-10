@@ -124,6 +124,10 @@ export function buildOAuthProfile(
     retryPolicy: resolveRetryPolicy(undefined, `dsh-auth: provider "${id}" retryPolicy`),
     configuredMaxTokens: new Map(),
     piProvider: catalog,
+    // Required since 0.1.5 (per-model pre-request diagnostics); this build
+    // reports none. Older adapters never read the field, so carrying it is
+    // harmless on a pre-0.1.5 host.
+    modelErrors: new Map(),
     maxRequestImageBytes: MAX_REQUEST_IMAGE_BYTES,
     requestImagePixelBudget: REQUEST_IMAGE_PIXEL_BUDGET,
     requestImageMaxBytes: REQUEST_IMAGE_MAX_BYTES,

@@ -14,6 +14,21 @@ import type { ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
 import { asStoredCredential, CredentialFile, type StoredOAuthCredential } from './credentials.js'
 import { oauthOf } from './profiles.js'
 import { QuestionBridge, type AskFn } from './interaction.js'
+import type { PiAiProvider } from './pi-ai.js'
+
+/**
+ * The constructed catalog provider one mounted route carries. 0.1.5 made
+ * `ResolvedPiAiProviderProfile.piProvider` optional (a stored route that
+ * cannot be constructed stays editable without one); this plugin mounts only
+ * constructible routes, so an absent provider here is a mount defect —
+ * surfaced loudly rather than as an `undefined` dereference mid-flow.
+ */
+function mountedProvider(profile: ResolvedPiAiProviderProfile): PiAiProvider {
+  if (profile.piProvider === undefined) {
+    throw new Error(`dsh-auth: provider "${profile.provider}" mounted without a constructed catalog provider`)
+  }
+  return profile.piProvider
+}
 
 /** One provider's sign-in state; never carries token material. */
 export interface DshAuthSignInStatus {
@@ -99,7 +114,7 @@ export function createDshAuthApi(deps: DshAuthApiDeps): DshAuthApi {
   const statusOf = async (): Promise<readonly DshAuthSignInStatus[]> => {
     const described = new Map((await deps.store.describe()).map(row => [row.provider, row]))
     return [...deps.profiles.entries()].map(([id, profile]) => {
-      const oauth = oauthOf(profile.piProvider)
+      const oauth = oauthOf(mountedProvider(profile))
       const row = described.get(id)
       return {
         provider: id,
@@ -118,7 +133,7 @@ export function createDshAuthApi(deps: DshAuthApiDeps): DshAuthApi {
     if (profile === undefined) {
       throw new Error(`dsh-auth: unknown provider "${provider}" (mounted: ${[...deps.profiles.keys()].join(', ')})`)
     }
-    const oauth = oauthOf(profile.piProvider)
+    const oauth = oauthOf(mountedProvider(profile))
     const runAbort = new AbortController()
     if (signal !== undefined) {
       if (signal.aborted) runAbort.abort(signal.reason)

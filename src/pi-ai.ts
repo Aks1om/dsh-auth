@@ -14,7 +14,11 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { PiAiAdapterOptions, ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
 
-export type PiAiProvider = ResolvedPiAiProviderProfile['piProvider']
+// 0.1.5 made `piProvider` optional (absent when a stored route cannot be
+// constructed); this package only ever handles constructible catalog
+// providers, so the shared alias is the non-nullable form. NonNullable is a
+// no-op against pre-0.1.5 typings, keeping one source for both generations.
+export type PiAiProvider = NonNullable<ResolvedPiAiProviderProfile['piProvider']>
 
 type PiAiAuth = PiAiAdapterOptions['auth']
 export type PiAiAuthContext = PiAiAuth['authContext']
