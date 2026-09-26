@@ -62,7 +62,8 @@ signed-in providers' catalogs (credential-gated — see below).
    per provider under the credential store's lock — concurrent requests never
    double-refresh a rotated token. The legacy single-credential document is
    read as a `Default` profile and is upgraded on the next write.
- - `/auth status`, `/auth use <provider> <profileId>` and
+- Bare `/auth` opens an interactive provider/account picker: choose a saved
+  profile or add another account without typing provider IDs. `/auth status`, `/auth use <provider> <profileId>` and
    `/auth logout <provider> [profileId]`; the `ctx.dshAuth` service
   exposes the same api for UIs (the dsh-tui `/provider` wizard and `/login`
   ride it).
@@ -70,7 +71,8 @@ signed-in providers' catalogs (credential-gated — see below).
 ## Usage
 
 ```
-/auth                          # status: which providers are signed in
+/auth                          # interactive provider/account picker
+/auth status                   # show which providers are signed in
 /auth login                    # pick a provider interactively
 /auth login openai-codex       # ChatGPT (Plus/Pro)
 /auth login openai-codex Work  # add a second named Codex profile

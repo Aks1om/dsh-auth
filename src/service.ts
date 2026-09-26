@@ -59,6 +59,8 @@ export interface DshAuthApi {
   /** Every mounted provider with masked sign-in state. */
   providers(): Promise<readonly DshAuthSignInStatus[]>
   profiles(provider: string): Promise<readonly CredentialProfileInfo[]>
+  /** Interactive account picker used by the bare `/auth` command. */
+  interactive(signal?: AbortSignal): Promise<{ provider: string; profileId: string; action: 'activated' | 'signed-in' }>
   /**
    * Run one provider's OAuth login. `provider` omitted asks the interactive
    * surface to choose among providers not currently signed in.
@@ -169,37 +171,97 @@ export function createDshAuthApi(deps: DshAuthApiDeps): DshAuthApi {
     }
   }
 
+  const login = async (provider?: string, signal?: AbortSignal, label?: string): Promise<DshAuthLoginResult> => {
+    const ask = deps.resolveAsk()
+    let target = provider
+    if (target === undefined) {
+      if (ask === undefined) {
+        throw new Error('dsh-auth: provider selection needs an interactive surface; run /auth inside the TUI')
+      }
+      const statuses = await statusOf()
+      const candidates = statuses.filter(row => !row.signedIn)
+      if (candidates.length === 0) throw new Error('dsh-auth: every mounted provider is already signed in')
+      target = await chooseProvider(ask, candidates, signal)
+    } else if (!deps.profiles.has(target)) {
+      throw new Error(`dsh-auth: unknown provider "${target}" (mounted: ${[...deps.profiles.keys()].join(', ')})`)
+    }
+    if (ask === undefined) {
+      throw new Error(
+        `dsh-auth: signing in to "${target}" needs an interactive surface (run inside dsh-tui or the web client); `
+        + 'this plugin refuses to assume a browser on this machine',
+      )
+    }
+    const existing = inflight.get(target)
+    if (existing !== undefined) throw new Error(`dsh-auth: a login for "${target}" is already running`)
+    const run = loginOne(target, ask, signal, label).finally(() => { inflight.delete(target) })
+    inflight.set(target, run)
+    return run
+  }
+
+  const interactive = async (signal?: AbortSignal) => {
+    const ask = deps.resolveAsk()
+    if (ask === undefined) throw new Error('dsh-auth: interactive account selection needs a TUI question surface')
+    const statuses = await statusOf()
+    const providerAnswer = await ask({
+      questions: [{
+        id: 'dsh-auth-manage-provider',
+        header: 'Accounts',
+        question: 'Choose a provider',
+        options: statuses.map(row => ({ label: row.label, description: row.oauthLabel })),
+      }],
+      signal,
+    })
+    const selectedProvider = statuses.find(row => row.label === providerAnswer.answers[0]?.selected[0])
+    if (selectedProvider === undefined) throw new Error('dsh-auth: no provider was chosen')
+
+    const profiles = await deps.store.profiles(selectedProvider.provider)
+    if (profiles.length === 0) {
+      await login(selectedProvider.provider, signal, 'Default')
+      const created = await deps.store.profiles(selectedProvider.provider)
+      const active = created.find(profile => profile.active) ?? created[0]
+      if (active === undefined) throw new Error('dsh-auth: login completed without a saved profile')
+      return { provider: selectedProvider.provider, profileId: active.profileId, action: 'signed-in' as const }
+    }
+
+    const addLabel = 'Add another account'
+    const options = [
+      ...profiles.map(profile => ({
+        label: `${profile.label}${profile.active ? ' (active)' : ''}`,
+        description: profile.profileId,
+      })),
+      { label: addLabel, description: `Sign in to ${selectedProvider.label} with another account` },
+    ]
+    const profileAnswer = await ask({
+      questions: [{
+        id: 'dsh-auth-manage-profile',
+        header: selectedProvider.label,
+        question: 'Choose an account',
+        options,
+      }],
+      signal,
+    })
+    const selected = profileAnswer.answers[0]?.selected[0]
+    if (selected === addLabel) {
+      const usedLabels = new Set(profiles.map(profile => profile.label))
+      let number = profiles.length + 1
+      while (usedLabels.has(`Account ${number}`)) number += 1
+      await login(selectedProvider.provider, signal, `Account ${number}`)
+      const created = await deps.store.profiles(selectedProvider.provider)
+      const active = created.find(profile => profile.active)
+      if (active === undefined) throw new Error('dsh-auth: login completed without a saved profile')
+      return { provider: selectedProvider.provider, profileId: active.profileId, action: 'signed-in' as const }
+    }
+    const chosen = profiles.find(profile => `${profile.label}${profile.active ? ' (active)' : ''}` === selected)
+    if (chosen === undefined) throw new Error('dsh-auth: no account was chosen')
+    await deps.store.activate(selectedProvider.provider, chosen.profileId)
+    return { provider: selectedProvider.provider, profileId: chosen.profileId, action: 'activated' as const }
+  }
+
   return {
     providers: statusOf,
     profiles: provider => deps.store.profiles(provider),
-    login: async (provider, signal, label) => {
-      const ask = deps.resolveAsk()
-      let target = provider
-      if (target === undefined) {
-        if (ask === undefined) {
-          throw new Error('dsh-auth: provider selection needs an interactive surface; name the provider: /auth login <provider>')
-        }
-        const statuses = await statusOf()
-        const candidates = statuses.filter(row => !row.signedIn)
-        if (candidates.length === 0) throw new Error('dsh-auth: every mounted provider is already signed in')
-        target = await chooseProvider(ask, candidates, signal)
-      } else if (!deps.profiles.has(target)) {
-        throw new Error(`dsh-auth: unknown provider "${target}" (mounted: ${[...deps.profiles.keys()].join(', ')})`)
-      }
-      if (ask === undefined) {
-        throw new Error(
-          `dsh-auth: signing in to "${target}" needs an interactive surface (run inside dsh-tui or the web client); `
-          + 'this plugin refuses to assume a browser on this machine',
-        )
-      }
-      const existing = inflight.get(target)
-      if (existing !== undefined) {
-        throw new Error(`dsh-auth: a login for "${target}" is already running`)
-      }
-       const run = loginOne(target, ask, signal, label).finally(() => { inflight.delete(target) })
-      inflight.set(target, run)
-      return run
-    },
+    login,
+    interactive,
     activate: (provider, profileId) => deps.store.activate(provider, profileId),
     rename: (provider, profileId, label) => deps.store.renameProfile(provider, profileId, label),
     logout: async (provider, profileId) => {

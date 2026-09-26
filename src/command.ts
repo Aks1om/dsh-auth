@@ -39,6 +39,21 @@ function parseArgs(raw: string): { verb: string | undefined; target: string | un
 export function createAuthCommandHandler(api: DshAuthApi): (invocation: CommandInvocation) => Promise<CommandResult> {
   return async invocation => {
     const { verb, target, extra } = parseArgs(invocation.rawInput)
+    if (verb === undefined && invocation.rawInput.trim() === '') {
+      try {
+        const result = await api.interactive(invocation.signal)
+        const profile = (await api.profiles(result.provider)).find(row => row.profileId === result.profileId)
+        const name = profile?.label ?? result.profileId
+        return {
+          kind: 'success',
+          text: result.action === 'activated'
+            ? `Active profile for ${result.provider}: ${name}.`
+            : `Signed in to ${result.provider} as ${name}.`,
+        }
+      } catch (error: unknown) {
+        return { kind: 'error', text: `dsh-auth: ${error instanceof Error ? error.message : String(error)}` }
+      }
+    }
     if (verb === undefined || verb === 'status') {
       if (target !== undefined) return { kind: 'error', text: USAGE }
       return { kind: 'success', text: renderStatus(await api.providers()) }

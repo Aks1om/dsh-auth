@@ -253,7 +253,7 @@ export function apply(ctx: Context, config: Config): void {
       const handler = createAuthCommandHandler(api)
       releases.push(commands.register({
         name: 'auth',
-        description: 'Provider subscription sign-in (OAuth): status, login, logout',
+        description: 'Choose an OAuth provider/account, or manage sign-in status',
         handler: invocation => {
           const operation = handler(invocation)
           active.add(operation)

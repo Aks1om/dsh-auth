@@ -190,7 +190,7 @@ try {
   const fakeAsk = async request => {
     asked.push(request)
     const question = request.questions[0]
-    if (question.id === 'dsh-auth-prompt' && question.options !== undefined) {
+    if ((question.id === 'dsh-auth-prompt' || question.id.startsWith('dsh-auth-manage-')) && question.options !== undefined) {
       return { answers: [{ id: question.id, selected: [question.options[0].label] }] }
     }
     if (question.id === 'dsh-auth-waiting') {
@@ -313,6 +313,11 @@ try {
   ok(savedProfiles.length === 2 && savedProfiles.find(profile => profile.active)?.label === 'Second',
     'a newly connected OAuth profile becomes active immediately')
   ok((await api.providers())[0].signedIn === true, 'status reports the signed-in provider')
+  const { createAuthCommandHandler } = await import('../lib/command.js')
+  const authCommand = createAuthCommandHandler(api)
+  const interactiveResult = await authCommand({ rawInput: '', signal: undefined })
+  ok(interactiveResult.kind === 'success' && interactiveResult.text.includes('Active profile for fake: Default'),
+    'bare /auth opens the provider/profile question flow and activates the chosen account')
   ok(await api.logout('fake'), 'logout removes the credential')
   let unknownLogin = ''
   try {
