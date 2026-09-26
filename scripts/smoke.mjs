@@ -308,6 +308,10 @@ try {
   ok((await api.providers())[0].signedIn === false, 'status reports unsigned providers')
   const login = await api.login('fake')
   ok(login.oauthLabel === 'Fake (subscription)' && (await apiStore.read('fake'))?.access === 'a', 'login runs the flow and persists the credential')
+  await api.login('fake', undefined, 'Second')
+  const savedProfiles = await api.profiles('fake')
+  ok(savedProfiles.length === 2 && savedProfiles.find(profile => profile.active)?.label === 'Second',
+    'a newly connected OAuth profile becomes active immediately')
   ok((await api.providers())[0].signedIn === true, 'status reports the signed-in provider')
   ok(await api.logout('fake'), 'logout removes the credential')
   let unknownLogin = ''

@@ -157,11 +157,12 @@ export function createDshAuthApi(deps: DshAuthApiDeps): DshAuthApi {
       const stored: StoredOAuthCredential = normalized
        const existing = await deps.store.profiles(provider)
        const label = requestedLabel?.trim() || 'Default'
-       if (existing.length === 0 || (existing.length === 1 && existing[0]?.label === 'Default' && requestedLabel === undefined)) {
-         await deps.store.modify(provider, async () => stored)
-       } else {
-         await deps.store.addProfile(provider, label, stored)
-       }
+        if (existing.length === 0 || (existing.length === 1 && existing[0]?.label === 'Default' && requestedLabel === undefined)) {
+          await deps.store.modify(provider, async () => stored)
+        } else {
+          const profileId = await deps.store.addProfile(provider, label, stored)
+          await deps.store.activate(provider, profileId)
+        }
       return { provider, oauthLabel: oauth.name, expiresAt: stored.expires }
     } finally {
       await bridge.settle()
