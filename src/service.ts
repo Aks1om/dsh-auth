@@ -11,7 +11,7 @@
 import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
-import { asStoredCredential, CredentialFile, type StoredOAuthCredential } from './credentials.js'
+import { asStoredCredential, CredentialFile, type CredentialProfileInfo, type StoredOAuthCredential } from './credentials.js'
 import { oauthOf } from './profiles.js'
 import { QuestionBridge, type AskFn } from './interaction.js'
 import type { PiAiProvider } from './pi-ai.js'
@@ -43,6 +43,8 @@ export interface DshAuthSignInStatus {
   expiresAt: number | undefined
   /** Signed in, but the stored access token has expired (refresh may still work). */
   expired: boolean
+  profiles: readonly CredentialProfileInfo[]
+  activeProfileId: string | undefined
 }
 
 /** The outcome of a successful login. */
@@ -56,15 +58,18 @@ export interface DshAuthLoginResult {
 export interface DshAuthApi {
   /** Every mounted provider with masked sign-in state. */
   providers(): Promise<readonly DshAuthSignInStatus[]>
+  profiles(provider: string): Promise<readonly CredentialProfileInfo[]>
   /**
    * Run one provider's OAuth login. `provider` omitted asks the interactive
    * surface to choose among providers not currently signed in.
    * @throws Error when no interactive surface is present, the provider is
    *   unknown, a login is already running, or the flow itself fails.
    */
-  login(provider?: string, signal?: AbortSignal): Promise<DshAuthLoginResult>
+  login(provider?: string, signal?: AbortSignal, label?: string): Promise<DshAuthLoginResult>
   /** Remove one provider's stored credential; resolves whether one existed. */
-  logout(provider: string): Promise<boolean>
+  logout(provider: string, profileId?: string): Promise<boolean>
+  activate(provider: string, profileId: string): Promise<void>
+  rename(provider: string, profileId: string, label: string): Promise<void>
 }
 
 /** Cordis service holder; `api` is set by the plugin's apply. */
@@ -113,9 +118,10 @@ export function createDshAuthApi(deps: DshAuthApiDeps): DshAuthApi {
 
   const statusOf = async (): Promise<readonly DshAuthSignInStatus[]> => {
     const described = new Map((await deps.store.describe()).map(row => [row.provider, row]))
-    return [...deps.profiles.entries()].map(([id, profile]) => {
+    return Promise.all([...deps.profiles.entries()].map(async ([id, profile]) => {
       const oauth = oauthOf(mountedProvider(profile))
       const row = described.get(id)
+      const profileRows = await deps.store.profiles(id)
       return {
         provider: id,
         label: profile.displayName,
@@ -124,11 +130,13 @@ export function createDshAuthApi(deps: DshAuthApiDeps): DshAuthApi {
         signedIn: row !== undefined && !row.expired,
         expiresAt: row?.expiresAt,
         expired: row?.expired ?? false,
+        profiles: profileRows,
+        activeProfileId: profileRows.find(profile => profile.active)?.profileId,
       }
-    })
+    }))
   }
 
-  const loginOne = async (provider: string, ask: AskFn, signal: AbortSignal | undefined): Promise<DshAuthLoginResult> => {
+  const loginOne = async (provider: string, ask: AskFn, signal: AbortSignal | undefined, requestedLabel?: string): Promise<DshAuthLoginResult> => {
     const profile = deps.profiles.get(provider)
     if (profile === undefined) {
       throw new Error(`dsh-auth: unknown provider "${provider}" (mounted: ${[...deps.profiles.keys()].join(', ')})`)
@@ -147,7 +155,13 @@ export function createDshAuthApi(deps: DshAuthApiDeps): DshAuthApi {
         throw new Error(`dsh-auth: the ${oauth.name} flow returned an unusable credential; nothing was stored`)
       }
       const stored: StoredOAuthCredential = normalized
-      await deps.store.modify(provider, async () => stored)
+       const existing = await deps.store.profiles(provider)
+       const label = requestedLabel?.trim() || 'Default'
+       if (existing.length === 0 || (existing.length === 1 && existing[0]?.label === 'Default' && requestedLabel === undefined)) {
+         await deps.store.modify(provider, async () => stored)
+       } else {
+         await deps.store.addProfile(provider, label, stored)
+       }
       return { provider, oauthLabel: oauth.name, expiresAt: stored.expires }
     } finally {
       await bridge.settle()
@@ -156,7 +170,8 @@ export function createDshAuthApi(deps: DshAuthApiDeps): DshAuthApi {
 
   return {
     providers: statusOf,
-    login: async (provider, signal) => {
+    profiles: provider => deps.store.profiles(provider),
+    login: async (provider, signal, label) => {
       const ask = deps.resolveAsk()
       let target = provider
       if (target === undefined) {
@@ -180,16 +195,20 @@ export function createDshAuthApi(deps: DshAuthApiDeps): DshAuthApi {
       if (existing !== undefined) {
         throw new Error(`dsh-auth: a login for "${target}" is already running`)
       }
-      const run = loginOne(target, ask, signal).finally(() => { inflight.delete(target) })
+       const run = loginOne(target, ask, signal, label).finally(() => { inflight.delete(target) })
       inflight.set(target, run)
       return run
     },
-    logout: async provider => {
+    activate: (provider, profileId) => deps.store.activate(provider, profileId),
+    rename: (provider, profileId, label) => deps.store.renameProfile(provider, profileId, label),
+    logout: async (provider, profileId) => {
       if (!deps.profiles.has(provider)) {
         throw new Error(`dsh-auth: unknown provider "${provider}" (mounted: ${[...deps.profiles.keys()].join(', ')})`)
       }
-      const existed = (await deps.store.read(provider)) !== undefined
-      await deps.store.delete(provider)
+       const existed = profileId === undefined
+         ? (await deps.store.read(provider)) !== undefined
+         : await deps.store.deleteProfile(provider, profileId)
+       if (profileId === undefined) await deps.store.delete(provider)
       return existed
     },
   }

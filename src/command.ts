@@ -8,7 +8,7 @@
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import type { DshAuthApi, DshAuthSignInStatus } from './service.js'
 
-const USAGE = 'Usage: /auth [status] | /auth login [provider] | /auth logout <provider>'
+const USAGE = 'Usage: /auth [status] | /auth login [provider] [label] | /auth use <provider> <profileId> | /auth logout <provider> [profileId]'
 
 function renderStatus(rows: readonly DshAuthSignInStatus[]): string {
   const lines = rows.map(row => {
@@ -17,17 +17,18 @@ function renderStatus(rows: readonly DshAuthSignInStatus[]): string {
       : row.expired
         ? 'signed in, token expired — /auth login to refresh'
         : 'not signed in'
-    return `  ${row.provider.padEnd(14)} ${state}`
+    const profiles = row.profiles.map(profile => `${profile.label}${profile.active ? ' *' : ''}`).join(', ')
+    return `  ${row.provider.padEnd(14)} ${state}${profiles === '' ? '' : ` [${profiles}]`}`
   })
   return ['dsh-auth providers:', ...lines].join('\n')
 }
 
 /** Split the raw input into at most two lowercase words: verb and target. */
-function parseArgs(raw: string): { verb: string | undefined; target: string | undefined } {
+function parseArgs(raw: string): { verb: string | undefined; target: string | undefined; extra: string | undefined } {
   const words = raw.trim().split(/\s+/u).filter(word => word !== '')
   const verb = words[0]?.toLowerCase()
   const target = words[1]
-  return { verb: words.length === 0 ? undefined : verb, target }
+  return { verb: words.length === 0 ? undefined : verb, target, extra: words[2] }
 }
 
 /**
@@ -37,14 +38,14 @@ function parseArgs(raw: string): { verb: string | undefined; target: string | un
  */
 export function createAuthCommandHandler(api: DshAuthApi): (invocation: CommandInvocation) => Promise<CommandResult> {
   return async invocation => {
-    const { verb, target } = parseArgs(invocation.rawInput)
+    const { verb, target, extra } = parseArgs(invocation.rawInput)
     if (verb === undefined || verb === 'status') {
       if (target !== undefined) return { kind: 'error', text: USAGE }
       return { kind: 'success', text: renderStatus(await api.providers()) }
     }
     if (verb === 'login') {
       try {
-        const result = await api.login(target, invocation.signal)
+         const result = await api.login(target, invocation.signal, extra)
         return {
           kind: 'success',
           text: `Signed in to ${result.oauthLabel} (${result.provider}); token expires `
@@ -57,10 +58,19 @@ export function createAuthCommandHandler(api: DshAuthApi): (invocation: CommandI
     if (verb === 'logout') {
       if (target === undefined) return { kind: 'error', text: USAGE }
       try {
-        const removed = await api.logout(target)
+         const removed = await api.logout(target, extra)
         return removed
           ? { kind: 'success', text: `Signed out of ${target}; its stored credential was removed.` }
           : { kind: 'error', text: `${target} was not signed in.` }
+      } catch (error: unknown) {
+        return { kind: 'error', text: `dsh-auth: ${error instanceof Error ? error.message : String(error)}` }
+      }
+    }
+    if (verb === 'use') {
+      if (target === undefined || extra === undefined) return { kind: 'error', text: USAGE }
+      try {
+        await api.activate(target, extra)
+        return { kind: 'success', text: `Active profile for ${target}: ${extra}.` }
       } catch (error: unknown) {
         return { kind: 'error', text: `dsh-auth: ${error instanceof Error ? error.message : String(error)}` }
       }

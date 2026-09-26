@@ -1,6 +1,6 @@
 /**
  * File-backed OAuth credential persistence: a pi-ai `CredentialStore` over
- * one JSON document, one credential per provider id.
+ * one JSON document, with named credentials per provider.
  *
  * Writes are atomic (temp file + rename) with 0700 directory / 0600 file
  * permissions best-effort on every platform. All mutations go through
@@ -23,9 +23,15 @@ import type { PiAiCredential, PiAiCredentialInfo, PiAiCredentialStore } from './
 export type StoredOAuthCredential = Extract<PiAiCredential, { type: 'oauth' }>
 
 /** On-disk document shape. */
+interface ProfileRecord {
+  label: string
+  credential: PiAiCredential
+}
+
 interface CredentialsDocument {
-  version: 1
-  providers: Record<string, PiAiCredential>
+  version: 2
+  active: Record<string, string>
+  profiles: Record<string, Record<string, ProfileRecord>>
 }
 
 /** Narrow an unknown parsed value into a stored credential, or reject it. */
@@ -46,7 +52,16 @@ export function defaultCredentialsFile(): string {
   return join(root, 'dsh-auth', 'credentials.json')
 }
 
-const EMPTY_DOCUMENT: CredentialsDocument = { version: 1, providers: {} }
+const EMPTY_DOCUMENT: CredentialsDocument = { version: 2, active: {}, profiles: {} }
+
+export interface CredentialProfileInfo {
+  readonly provider: string
+  readonly profileId: string
+  readonly label: string
+  readonly active: boolean
+  readonly expiresAt: number
+  readonly expired: boolean
+}
 
 /**
  * The credential file. IO failures throw (loud, naming the path) rather than
@@ -56,7 +71,7 @@ const EMPTY_DOCUMENT: CredentialsDocument = { version: 1, providers: {} }
  */
 export class CredentialFile implements PiAiCredentialStore {
   readonly path: string
-  /** Per-provider operation chains: modify/delete never overlap for one id. */
+  /** Per-provider operation chains: profile mutations never overlap. */
   private readonly chains = new Map<string, Promise<unknown>>()
   private cache: CredentialsDocument | undefined
 
@@ -66,16 +81,18 @@ export class CredentialFile implements PiAiCredentialStore {
 
   /** The stored credential for one provider, possibly expired. */
   async read(providerId: string): Promise<PiAiCredential | undefined> {
-    return (await this.load()).providers[providerId]
+    const document = await this.load()
+    const profileId = document.active[providerId]
+    return profileId === undefined ? undefined : document.profiles[providerId]?.[profileId]?.credential
   }
 
   /** Stored credential metadata without resolving or exposing secrets. */
   async list(): Promise<readonly PiAiCredentialInfo[]> {
     const document = await this.load()
-    return Object.entries(document.providers).map(([providerId, credential]) => ({
-      providerId,
-      type: credential.type,
-    }))
+    return Object.entries(document.active).flatMap(([providerId, profileId]) => {
+      const credential = document.profiles[providerId]?.[profileId]?.credential
+      return credential === undefined ? [] : [{ providerId, type: credential.type }]
+    })
   }
 
   /**
@@ -90,13 +107,19 @@ export class CredentialFile implements PiAiCredentialStore {
   ): Promise<PiAiCredential | undefined> {
     return this.chain(providerId, async () => {
       const document = await this.load()
-      const current = document.providers[providerId]
+      const profileId = await this.ensureActive(document, providerId)
+      const current = profileId === undefined ? undefined : document.profiles[providerId]?.[profileId]?.credential
       const replacement = await fn(current)
       if (replacement === undefined || replacement === current) return current
       if (replacement.type !== 'oauth') {
         throw new Error(`dsh-auth: refusing to store a "${replacement.type}" credential for "${providerId}" — this store holds OAuth credentials only`)
       }
-      await this.save({ ...document, providers: { ...document.providers, [providerId]: replacement } })
+      if (profileId === undefined) {
+        const profiles = { ...document.profiles, [providerId]: { default: { label: 'Default', credential: replacement } } }
+        await this.save({ ...document, profiles, active: { ...document.active, [providerId]: 'default' } })
+        return replacement
+      }
+      await this.save(this.withCredential(document, providerId, profileId, replacement))
       return replacement
     })
   }
@@ -105,10 +128,84 @@ export class CredentialFile implements PiAiCredentialStore {
   async delete(providerId: string): Promise<void> {
     await this.chain(providerId, async () => {
       const document = await this.load()
-      if (!(providerId in document.providers)) return
-      const providers = { ...document.providers }
-      delete providers[providerId]
-      await this.save({ ...document, providers })
+      const profileId = document.active[providerId]
+      if (profileId === undefined) return
+      const profiles = { ...document.profiles }
+      delete profiles[providerId]
+      const active = { ...document.active }
+      delete active[providerId]
+      await this.save({ ...document, profiles, active })
+    })
+  }
+
+  async profiles(providerId: string): Promise<readonly CredentialProfileInfo[]> {
+    const document = await this.load()
+    const active = document.active[providerId]
+    const now = Date.now()
+    return Object.entries(document.profiles[providerId] ?? {}).map(([profileId, profile]) => ({
+      provider: providerId,
+      profileId,
+      label: profile.label,
+      active: profileId === active,
+      expiresAt: (profile.credential as StoredOAuthCredential).expires,
+      expired: (profile.credential as StoredOAuthCredential).expires <= now,
+    }))
+  }
+
+  async addProfile(providerId: string, label: string, credential: StoredOAuthCredential): Promise<string> {
+    return this.chain(providerId, async () => {
+      const document = await this.load()
+      const profileId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+      const providerProfiles = { ...(document.profiles[providerId] ?? {}), [profileId]: { label, credential } }
+      const profiles = { ...document.profiles, [providerId]: providerProfiles }
+      const active = document.active[providerId] === undefined
+        ? { ...document.active, [providerId]: profileId }
+        : document.active
+      await this.save({ ...document, profiles, active })
+      return profileId
+    })
+  }
+
+  async activate(providerId: string, profileId: string): Promise<void> {
+    await this.chain(providerId, async () => {
+      const document = await this.load()
+      if (document.profiles[providerId]?.[profileId] === undefined) {
+        throw new Error(`dsh-auth: unknown profile "${profileId}" for "${providerId}"`)
+      }
+      await this.save({ ...document, active: { ...document.active, [providerId]: profileId } })
+    })
+  }
+
+  async deleteProfile(providerId: string, profileId: string): Promise<boolean> {
+    return this.chain(providerId, async () => {
+      const document = await this.load()
+      const providerProfiles = document.profiles[providerId]
+      if (providerProfiles?.[profileId] === undefined) return false
+      const remaining = { ...providerProfiles }
+      delete remaining[profileId]
+      const profiles = { ...document.profiles }
+      const active = { ...document.active }
+      if (Object.keys(remaining).length === 0) {
+        delete profiles[providerId]
+        delete active[providerId]
+      } else {
+        profiles[providerId] = remaining
+        if (active[providerId] === profileId) active[providerId] = Object.keys(remaining)[0]!
+      }
+      await this.save({ ...document, profiles, active })
+      return true
+    })
+  }
+
+  async renameProfile(providerId: string, profileId: string, label: string): Promise<void> {
+    await this.chain(providerId, async () => {
+      const document = await this.load()
+      const current = document.profiles[providerId]?.[profileId]
+      if (current === undefined) throw new Error(`dsh-auth: unknown profile "${profileId}" for "${providerId}"`)
+      await this.save({ ...document, profiles: {
+        ...document.profiles,
+        [providerId]: { ...document.profiles[providerId], [profileId]: { ...current, label } },
+      } })
     })
   }
 
@@ -116,13 +213,12 @@ export class CredentialFile implements PiAiCredentialStore {
   async describe(): Promise<readonly { provider: string; expiresAt: number; expired: boolean }[]> {
     const document = await this.load()
     const now = Date.now()
-    return Object.entries(document.providers)
-      .filter((entry): entry is [string, StoredOAuthCredential] => entry[1].type === 'oauth')
-      .map(([provider, credential]) => ({
-        provider,
-        expiresAt: credential.expires,
-        expired: credential.expires <= now,
-      }))
+    return Object.entries(document.active).flatMap(([provider, profileId]) => {
+      const credential = document.profiles[provider]?.[profileId]?.credential
+      return credential?.type === 'oauth'
+        ? [{ provider, expiresAt: credential.expires, expired: credential.expires <= now }]
+        : []
+    })
   }
 
   /** Run one operation after every earlier operation for the same provider. */
@@ -157,21 +253,59 @@ export class CredentialFile implements PiAiCredentialStore {
       throw new Error(`dsh-auth: credential file ${this.path} has an unexpected shape; fix or remove it by hand`)
     }
     const record = parsed as Record<string, unknown>
-    if (record['version'] !== 1 || typeof record['providers'] !== 'object' || record['providers'] === null) {
+    if (record['version'] === 1 && typeof record['providers'] === 'object' && record['providers'] !== null) {
+      const profiles: CredentialsDocument['profiles'] = {}
+      const active: CredentialsDocument['active'] = {}
+      for (const [provider, value] of Object.entries(record['providers'] as Record<string, unknown>)) {
+        const credential = asStoredCredential(value)
+        if (credential === undefined) throw new Error(`dsh-auth: credential file ${this.path} holds an invalid entry for "${provider}"`)
+        const profileId = 'default'
+        profiles[provider] = { [profileId]: { label: 'Default', credential } }
+        active[provider] = profileId
+      }
+      this.cache = { version: 2, active, profiles }
+      return this.cache
+    }
+    if (record['version'] !== 2 || typeof record['profiles'] !== 'object' || record['profiles'] === null
+      || typeof record['active'] !== 'object' || record['active'] === null) {
       throw new Error(`dsh-auth: credential file ${this.path} has an unexpected shape; fix or remove it by hand`)
     }
-    const providers: Record<string, PiAiCredential> = {}
-    for (const [provider, value] of Object.entries(record['providers'] as Record<string, unknown>)) {
-      const credential = asStoredCredential(value)
-      if (credential === undefined) {
-        throw new Error(
-          `dsh-auth: credential file ${this.path} holds an invalid entry for "${provider}"; fix or remove it by hand`,
-        )
+    const profiles: CredentialsDocument['profiles'] = {}
+    for (const [provider, value] of Object.entries(record['profiles'] as Record<string, unknown>)) {
+      if (typeof value !== 'object' || value === null) throw new Error(`dsh-auth: invalid profiles for "${provider}"`)
+      const rows: Record<string, ProfileRecord> = {}
+      for (const [profileId, raw] of Object.entries(value as Record<string, unknown>)) {
+        if (typeof raw !== 'object' || raw === null || typeof (raw as Record<string, unknown>)['label'] !== 'string') {
+          throw new Error(`dsh-auth: invalid profile "${profileId}" for "${provider}"`)
+        }
+        const credential = asStoredCredential((raw as Record<string, unknown>)['credential'])
+        if (credential === undefined) throw new Error(`dsh-auth: invalid credential for profile "${profileId}"`)
+        rows[profileId] = { label: String((raw as Record<string, unknown>)['label']), credential }
       }
-      providers[provider] = credential
+      profiles[provider] = rows
     }
-    this.cache = { version: 1, providers }
+    this.cache = { version: 2, active: { ...(record['active'] as Record<string, string>) }, profiles }
     return this.cache
+  }
+
+  private async ensureActive(document: CredentialsDocument, providerId: string): Promise<string | undefined> {
+    const current = document.active[providerId]
+    if (current !== undefined) return current
+    const first = Object.keys(document.profiles[providerId] ?? {})[0]
+    if (first !== undefined) {
+      document.active[providerId] = first
+      return first
+    }
+    return undefined
+  }
+
+  private withCredential(document: CredentialsDocument, providerId: string, profileId: string, credential: PiAiCredential): CredentialsDocument {
+    const current = document.profiles[providerId]?.[profileId]
+    if (current === undefined) throw new Error(`dsh-auth: unknown profile "${profileId}" for "${providerId}"`)
+    return { ...document, profiles: {
+      ...document.profiles,
+      [providerId]: { ...document.profiles[providerId], [profileId]: { ...current, credential } },
+    } }
   }
 
   private async save(document: CredentialsDocument): Promise<void> {

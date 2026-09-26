@@ -108,6 +108,7 @@ export { QuestionBridge, describeEvent } from './interaction.js'
 export type { AskFn, QuestionBridgeHelpers } from './interaction.js'
 export { copyToClipboard, openInBrowser, openerFor } from './opener.js'
 export { CredentialFile, defaultCredentialsFile } from './credentials.js'
+export type { CredentialProfileInfo } from './credentials.js'
 export { OAUTH_PROVIDER_IDS, buildOAuthProfile, type ModelOverride } from './profiles.js'
 
 /**

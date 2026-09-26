@@ -54,9 +54,15 @@ try {
   await store.modify('anthropic', async () => firstCred)
   ok((await store.read('anthropic'))?.access === 'a1', 'modify persists and read returns the credential')
   const document = JSON.parse(readFileSync(store.path, 'utf8'))
-  ok(document.version === 1 && document.providers['anthropic']?.type === 'oauth', 'file shape is the versioned document')
+   ok(document.version === 2 && document.profiles['anthropic']?.default?.credential?.type === 'oauth', 'file shape is the versioned profile document')
+   const secondId = await store.addProfile('anthropic', 'Work', { type: 'oauth', access: 'a2', refresh: 'r2', expires: Date.now() + 3_600_000 })
+   ok((await store.profiles('anthropic')).length === 2, 'a provider can hold multiple named profiles')
+   await store.activate('anthropic', secondId)
+   ok((await store.read('anthropic'))?.access === 'a2', 'activation changes the credential used by the provider')
+   await store.renameProfile('anthropic', secondId, 'Work account')
+   ok((await store.profiles('anthropic')).find(row => row.profileId === secondId)?.label === 'Work account', 'profile labels can be renamed')
   await store.modify('anthropic', async () => undefined)
-  ok((await store.read('anthropic'))?.access === 'a1', 'undefined from modify leaves the entry unchanged')
+   ok((await store.read('anthropic'))?.access === 'a2', 'undefined from modify leaves the active profile unchanged')
   ok((await store.list()).length === 1 && (await store.list())[0].type === 'oauth', 'list reports credential metadata without secrets')
   ok((await store.describe()).length === 1, 'describe lists stored providers without secrets')
 
@@ -86,7 +92,7 @@ try {
   ok(refusedWrite.includes('OAuth credentials only'), 'a non-OAuth credential write is refused loudly')
 
   ok(await (async () => { const had = (await store.read('anthropic')) !== undefined; await store.delete('anthropic'); return had })(), 'delete removes the credential')
-  ok((await store.read('anthropic')) === undefined, 'deleted entry reads as nothing stored')
+   ok((await store.read('anthropic')) === undefined, 'deleted provider reads as nothing stored')
 
   const corruptPath = join(root, 'corrupt.json')
   writeFileSync(corruptPath, '{not json', { mode: 0o600 })

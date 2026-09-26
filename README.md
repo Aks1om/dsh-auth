@@ -48,7 +48,8 @@ signed-in providers' catalogs (credential-gated — see below).
 - Loads those Provider objects from the exact pi-ai dependency owned by the
   installed `dsh-llm-pi-ai`. rc and alpha hosts therefore keep their supported
   pi-ai versions without passing Provider objects across package instances.
-- `/auth login [provider]` runs the provider's OAuth flow interactively. The
+ - `/auth login [provider] [label]` runs the provider's OAuth flow interactively. A
+   label adds a second saved profile instead of replacing the current one. The
   waiting panel behaves the way pi's host does: the authorization URL is
   **opened in your browser automatically** (never hand-copied — the URL is
   hundreds of characters and wrap artifacts corrupt its `redirect_uri`),
@@ -57,10 +58,12 @@ signed-in providers' catalogs (credential-gated — see below).
   the short code the copy target. OpenAI Codex also offers a device-code
   login method — the most robust path on headless or locked-down machines
   (no localhost:1455 callback needed).
-- Stored access tokens refresh automatically before each request, serialized
-  per provider under the credential store's lock — concurrent requests never
-  double-refresh a rotated token.
-- `/auth status` / `/auth logout <provider>`; the `ctx.dshAuth` service
+ - Stored access tokens refresh automatically before each request, serialized
+   per provider under the credential store's lock — concurrent requests never
+   double-refresh a rotated token. The legacy single-credential document is
+   read as a `Default` profile and is upgraded on the next write.
+ - `/auth status`, `/auth use <provider> <profileId>` and
+   `/auth logout <provider> [profileId]`; the `ctx.dshAuth` service
   exposes the same api for UIs (the dsh-tui `/provider` wizard and `/login`
   ride it).
 
@@ -70,6 +73,8 @@ signed-in providers' catalogs (credential-gated — see below).
 /auth                          # status: which providers are signed in
 /auth login                    # pick a provider interactively
 /auth login openai-codex       # ChatGPT (Plus/Pro)
+/auth login openai-codex Work  # add a second named Codex profile
+/auth use openai-codex <profileId> # switch the active profile for new requests
 /auth login anthropic          # Claude (Pro/Max)
 /auth login xai                # SuperGrok / X Premium
 /auth logout anthropic
