@@ -17,7 +17,7 @@ function renderStatus(rows: readonly DshAuthSignInStatus[]): string {
       : row.expired
         ? 'signed in, token expired — /auth login to refresh'
         : 'not signed in'
-    const profiles = row.profiles.map(profile => `${profile.label}${profile.active ? ' *' : ''}`).join(', ')
+    const profiles = row.profiles.map(profile => `${profile.label} (${profile.profileId})${profile.active ? ' *' : ''}`).join(', ')
     return `  ${row.provider.padEnd(14)} ${state}${profiles === '' ? '' : ` [${profiles}]`}`
   })
   return ['dsh-auth providers:', ...lines].join('\n')
@@ -69,8 +69,10 @@ export function createAuthCommandHandler(api: DshAuthApi): (invocation: CommandI
     if (verb === 'use') {
       if (target === undefined || extra === undefined) return { kind: 'error', text: USAGE }
       try {
-        await api.activate(target, extra)
-        return { kind: 'success', text: `Active profile for ${target}: ${extra}.` }
+        const profile = (await api.profiles(target)).find(row => row.profileId === extra || row.label === extra)
+        if (profile === undefined) return { kind: 'error', text: `dsh-auth: unknown profile "${extra}" for "${target}"` }
+        await api.activate(target, profile.profileId)
+        return { kind: 'success', text: `Active profile for ${target}: ${profile.label} (${profile.profileId}).` }
       } catch (error: unknown) {
         return { kind: 'error', text: `dsh-auth: ${error instanceof Error ? error.message : String(error)}` }
       }
