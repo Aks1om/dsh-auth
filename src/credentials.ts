@@ -29,7 +29,7 @@ interface ProfileRecord {
 }
 
 interface CredentialsDocument {
-  version: 2
+  version: 3
   active: Record<string, string>
   profiles: Record<string, Record<string, ProfileRecord>>
 }
@@ -52,7 +52,7 @@ export function defaultCredentialsFile(): string {
   return join(root, 'dsh-auth', 'credentials.json')
 }
 
-const EMPTY_DOCUMENT: CredentialsDocument = { version: 2, active: {}, profiles: {} }
+const EMPTY_DOCUMENT: CredentialsDocument = { version: 3, active: {}, profiles: {} }
 
 export interface CredentialProfileInfo {
   readonly provider: string
@@ -263,10 +263,34 @@ export class CredentialFile implements PiAiCredentialStore {
         profiles[provider] = { [profileId]: { label: 'Default', credential } }
         active[provider] = profileId
       }
-      this.cache = { version: 2, active, profiles }
+      this.cache = { version: 3, active, profiles }
       return this.cache
     }
-    if (record['version'] !== 2 || typeof record['profiles'] !== 'object' || record['profiles'] === null
+    if (record['version'] === 2 && typeof record['providers'] === 'object' && record['providers'] !== null) {
+      const profiles: CredentialsDocument['profiles'] = {}
+      const active: CredentialsDocument['active'] = {}
+      for (const [provider, raw] of Object.entries(record['providers'] as Record<string, unknown>)) {
+        if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new Error(`dsh-auth: invalid accounts for "${provider}"`)
+        const entry = raw as Record<string, unknown>
+        if (typeof entry['accounts'] !== 'object' || entry['accounts'] === null || Array.isArray(entry['accounts'])) {
+          throw new Error(`dsh-auth: invalid accounts for "${provider}"`)
+        }
+        const rows: Record<string, ProfileRecord> = {}
+        for (const [id, account] of Object.entries(entry['accounts'] as Record<string, unknown>)) {
+          const credential = asStoredCredential(account)
+          if (credential === undefined) throw new Error(`dsh-auth: invalid account "${id}" for "${provider}"`)
+          rows[id] = { label: id === 'default' ? 'Default' : id, credential }
+        }
+        const ids = Object.keys(rows)
+        if (ids.length === 0) continue
+        const selected = entry['active']
+        active[provider] = typeof selected === 'string' && rows[selected] !== undefined ? selected : ids[0]!
+        profiles[provider] = rows
+      }
+      this.cache = { version: 3, active, profiles }
+      return this.cache
+    }
+    if ((record['version'] !== 2 && record['version'] !== 3) || typeof record['profiles'] !== 'object' || record['profiles'] === null
       || typeof record['active'] !== 'object' || record['active'] === null) {
       throw new Error(`dsh-auth: credential file ${this.path} has an unexpected shape; fix or remove it by hand`)
     }
@@ -284,7 +308,7 @@ export class CredentialFile implements PiAiCredentialStore {
       }
       profiles[provider] = rows
     }
-    this.cache = { version: 2, active: { ...(record['active'] as Record<string, string>) }, profiles }
+    this.cache = { version: 3, active: { ...(record['active'] as Record<string, string>) }, profiles }
     return this.cache
   }
 

@@ -54,7 +54,19 @@ try {
   await store.modify('anthropic', async () => firstCred)
   ok((await store.read('anthropic'))?.access === 'a1', 'modify persists and read returns the credential')
   const document = JSON.parse(readFileSync(store.path, 'utf8'))
-   ok(document.version === 2 && document.profiles['anthropic']?.default?.credential?.type === 'oauth', 'file shape is the versioned profile document')
+    ok(document.version === 3 && document.profiles['anthropic']?.default?.credential?.type === 'oauth', 'file shape is the versioned profile document')
+   const oldPath = join(root, 'old-v2.json')
+   const oldText = JSON.stringify({ version: 2, providers: { 'openai-codex': { active: 'work', accounts: {
+     default: { type: 'oauth', access: 'fixture-one', refresh: 'fixture-refresh-one', expires: Date.now() + 3_600_000, accountId: 'one' },
+     work: { type: 'oauth', access: 'fixture-two', refresh: 'fixture-refresh-two', expires: Date.now() + 3_600_000, accountId: 'two' },
+   } } } })
+   writeFileSync(oldPath, oldText)
+   const oldStore = new CredentialFile(oldPath)
+   ok((await oldStore.profiles('openai-codex')).length === 2 && (await oldStore.read('openai-codex'))?.accountId === 'two', 'existing account-store v2 is readable and preserves active OAuth account')
+   ok(readFileSync(oldPath, 'utf8') === oldText, 'read-only v2 migration leaves the original file unchanged')
+   await oldStore.activate('openai-codex', 'default')
+   const upgraded = JSON.parse(readFileSync(oldPath, 'utf8'))
+   ok(upgraded.version === 3 && upgraded.profiles['openai-codex'].work.credential.accountId === 'two', 'first write migrates all accounts without losing OAuth metadata')
    const secondId = await store.addProfile('anthropic', 'Work', { type: 'oauth', access: 'a2', refresh: 'r2', expires: Date.now() + 3_600_000 })
    ok((await store.profiles('anthropic')).length === 2, 'a provider can hold multiple named profiles')
    await store.activate('anthropic', secondId)

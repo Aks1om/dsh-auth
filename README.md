@@ -61,7 +61,9 @@ signed-in providers' catalogs (credential-gated — see below).
  - Stored access tokens refresh automatically before each request, serialized
    per provider under the credential store's lock — concurrent requests never
    double-refresh a rotated token. The legacy single-credential document is
-   read as a `Default` profile and is upgraded on the next write.
+    read as a `Default` profile and is upgraded on the next write. Existing
+    v2 files with `providers → accounts` are also read without rewriting; the
+    selected account and OAuth metadata survive the first write to v3.
 - Bare `/auth` opens an interactive provider/account picker: choose a saved
   profile or add another account without typing provider IDs. `/auth status`, `/auth use <provider> <profileId>` and
    `/auth logout <provider> [profileId]`; the `ctx.dshAuth` service
