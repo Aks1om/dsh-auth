@@ -330,6 +330,19 @@ try {
   const interactiveResult = await authCommand({ rawInput: '', signal: undefined })
   ok(interactiveResult.kind === 'success' && interactiveResult.text.includes('Active profile for fake: Default'),
     'bare /auth opens the provider/profile question flow and activates the chosen account')
+  const legacyPath = join(root, 'legacy-auth-command.json')
+  writeFileSync(legacyPath, oldText)
+  const legacyApi = createDshAuthApi({
+    profiles: new Map([['openai-codex', { ...fakeProfile, provider: 'openai-codex' }]]),
+    store: new CredentialFile(legacyPath),
+    resolveAsk: () => fakeAsk,
+    logger: { warn() {} },
+  })
+  const legacyResult = await createAuthCommandHandler(legacyApi)({ rawInput: '', signal: undefined })
+  const legacyAfter = JSON.parse(readFileSync(legacyPath, 'utf8'))
+  ok(legacyResult.kind === 'success' && legacyAfter.version === 3
+    && legacyAfter.profiles['openai-codex'].work.credential.accountId === 'two',
+    'interactive /auth uses an existing v2 Codex sign-in without OAuth re-login or losing account metadata')
   ok(await api.logout('fake'), 'logout removes the credential')
   let unknownLogin = ''
   try {
