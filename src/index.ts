@@ -80,6 +80,8 @@ interface CommandsLike {
 export interface Config {
   /** Provider routes to mount; every entry must ship an OAuth flow in the installed pi-ai catalog. */
   providers?: string[]
+  /** Register the standalone `/auth` command; disable when the host supplies a unified account manager. */
+  command?: boolean
   /** Credential file override; default `$DSH_HOME/dsh-auth/credentials.json`. */
   credentialsFile?: string
   /**
@@ -98,6 +100,7 @@ const modelOverride = z.object({
 
 export const Config: z<Config> = z.object({
   providers: z.array(z.string()).default([...OAUTH_PROVIDER_IDS]),
+  command: z.boolean().default(true),
   credentialsFile: z.string(),
   modelOverrides: z.dict(z.dict(modelOverride)),
 })
@@ -249,6 +252,8 @@ export function apply(ctx: Context, config: Config): void {
     const active = new Set<Promise<unknown>>()
     if (commands === undefined) {
       ctx.logger.warn('dsh-auth: no commands service mounted — the /auth command stays unregistered')
+    } else if (config.command === false) {
+      ctx.logger.debug('dsh-auth: command registration disabled by host; use its unified account manager')
     } else {
       const handler = createAuthCommandHandler(api)
       releases.push(commands.register({

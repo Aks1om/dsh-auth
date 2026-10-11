@@ -11,9 +11,9 @@ Claude Code style terminal front door for DeepSeek Harness; it also installs
 standalone into any dsh profile.
 
 ```
-dsh-tui → /provider → 订阅账号登录（OAuth）→ sign in   ← the TUI integration
-          /auth login openai-codex                     ← the plugin command
-          /model → OpenAI Codex → gpt-5.6-sol          ← routes & models
+dsh-tui → /account → add / switch / sign out OAuth accounts and API providers
+          /account status → key and saved-account status
+          /model → OpenAI Codex → gpt-5.6-sol
 ```
 
 **Status: experimental (M1).** The OAuth flows themselves are
@@ -26,8 +26,8 @@ the TUI, the web client, and refuses cleanly on headless hosts.
 ## Install
 
 **With dsh-TUI** — nothing to do: dsh-auth ships inside the dsh-tui package
-(bundled dependency). Update dsh-tui and the `/provider` wizard gains its
-subscription sign-in branch automatically.
+(bundled dependency). Update dsh-tui and `/account` includes OAuth account
+setup and saved-profile switching.
 
 **Standalone, into any dsh profile:**
 
@@ -35,8 +35,8 @@ subscription sign-in branch automatically.
 dsh plugin --profile <name> add @deepseek-harness-tui/dsh-auth
 ```
 
-Then restart the host; `/` lists `auth`, and every model picker gains the
-signed-in providers' catalogs (credential-gated — see below).
+Then restart the generic dsh host; `/` lists `auth`, and every model picker
+gains the signed-in providers' catalogs (credential-gated — see below).
 
 ## What it does
 
@@ -48,9 +48,11 @@ signed-in providers' catalogs (credential-gated — see below).
 - Loads those Provider objects from the exact pi-ai dependency owned by the
   installed `dsh-llm-pi-ai`. rc and alpha hosts therefore keep their supported
   pi-ai versions without passing Provider objects across package instances.
- - `/auth login [provider] [label]` runs the provider's OAuth flow interactively. A
-   label adds a second saved profile instead of replacing the current one. The
-  waiting panel behaves the way pi's host does: the authorization URL is
+- In aitui, OAuth registration and account switching run through the unified
+  `/account` command; the standalone `/auth` command is disabled there. In
+  generic dsh profiles, `/auth login [provider] [label]` remains available;
+  a label adds a second saved profile instead of replacing the current one.
+  The waiting panel behaves the way pi's host does: the authorization URL is
   **opened in your browser automatically** (never hand-copied — the URL is
   hundreds of characters and wrap artifacts corrupt its `redirect_uri`),
   and the panel offers *Copy authorization link* / *Open browser again* /
@@ -58,21 +60,22 @@ signed-in providers' catalogs (credential-gated — see below).
   the short code the copy target. OpenAI Codex also offers a device-code
   login method — the most robust path on headless or locked-down machines
   (no localhost:1455 callback needed).
- - Stored access tokens refresh automatically before each request, serialized
-   per provider under the credential store's lock — concurrent requests never
-   double-refresh a rotated token. The legacy single-credential document is
-    read as a `Default` profile and is upgraded on the next write. Existing
-    v2 files with `providers → accounts` are also read without rewriting; the
-    selected account and OAuth metadata survive the first write to v3.
-- Bare `/auth` opens an interactive provider/account picker: choose a saved
-  profile or add another account without typing provider IDs. `/auth status`, `/auth use <provider> <profileId>` and
-   `/auth logout <provider> [profileId]`; the `ctx.dshAuth` service
-  exposes the same api for UIs (the dsh-tui `/provider` wizard and `/login`
-  ride it).
+- Stored access tokens refresh automatically before each request, serialized
+  per provider under the credential store's lock — concurrent requests never
+  double-refresh a rotated token.
+- The legacy single-credential document is read as a `Default` profile and
+  upgraded on the next write. Existing v2 files with `providers → accounts`
+  are read without rewriting; selected account and OAuth metadata survive
+  the first write to v3.
+- Generic dsh hosts can open the `/auth` provider/account picker, inspect
+  `/auth status`, switch with `/auth use <provider> <profileId>`, or sign out
+  with `/auth logout <provider> [profileId]`. The `ctx.dshAuth` service
+  exposes the same API to UI account managers.
 
 ## Usage
 
-```
+```sh
+# Standalone generic dsh profiles only; aitui uses `/account` instead:
 /auth                          # interactive provider/account picker
 /auth status                   # show which providers are signed in
 /auth login                    # pick a provider interactively
@@ -94,6 +97,7 @@ the `/auth login <provider>` hint — never silently.
   name: '@deepseek-harness-tui/dsh-auth'
   config:
     providers: [openai-codex, anthropic, xai]   # any non-empty subset
+    command: true                                # generic hosts; aitui turns it off
     # credentialsFile: /secure/path/credentials.json
 ```
 
@@ -138,8 +142,8 @@ the [dsh-TUI repository](https://github.com/ccch1mneyyy/dsh-TUI) as the
 
 ## Roadmap
 
-- **M2** *(landed)* — dsh-tui integration: `/provider` OAuth branch, `/login`
-  account section, two-level `/model` picker with a pinned recently-used
+- **M2** *(landed)* — dsh-tui integration: unified `/account` OAuth branch and
+  `/account status`, two-level `/model` picker with a pinned recently-used
   group.
 - **M3** — `dsh-ecosystem-spec` conformance (manifest validation, admission
   fixtures) plus the remaining pi-ai OAuth providers (GitHub Copilot,

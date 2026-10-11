@@ -1,6 +1,6 @@
 /**
  * The `ctx.dshAuth` service: the programmatic surface over this plugin's
- * mounted OAuth routes. UIs (the dsh-tui /provider wizard, a web settings
+ * mounted OAuth routes. UIs (the dsh-tui /account wizard, a web settings
  * page) enumerate providers with masked sign-in state and drive login/logout
  * without touching the credential file or the pi-ai flow objects; the `/auth`
  * command in `command.ts` is a thin textual veneer over the same api.
