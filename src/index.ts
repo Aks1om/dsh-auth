@@ -113,6 +113,8 @@ export { copyToClipboard, openInBrowser, openerFor } from './opener.js'
 export { CredentialFile, defaultCredentialsFile } from './credentials.js'
 export type { CredentialProfileInfo } from './credentials.js'
 export { OAUTH_PROVIDER_IDS, buildOAuthProfile, type ModelOverride } from './profiles.js'
+import { CodexModelDiscovery } from './modelDiscovery.js'
+import { asStoredCredential } from './credentials.js'
 
 /**
  * The ambient auth context providers may consult while resolving their own
@@ -148,13 +150,21 @@ export class CredentialGatedAdapter extends PiAiAdapter {
   constructor(
     options: PiAiAdapterOptions,
     private readonly hasCredential: (provider: string) => Promise<boolean>,
+    private readonly prepareCatalog?: (provider: string) => Promise<ReadonlySet<string> | undefined>,
   ) {
     super(options)
   }
 
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     if (!(await this.hasCredential(provider))) return []
-    return super.listModels(provider)
+    const visible = await this.prepareCatalog?.(provider)
+    const models = await super.listModels(provider)
+    return visible === undefined ? models : models.filter(model => visible.has(model.id))
+  }
+
+  override async resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmModelInfo> {
+    await this.prepareCatalog?.(provider)
+    return super.resolveModel(provider, model, signal)
   }
 }
 
@@ -180,8 +190,43 @@ export function apply(ctx: Context, config: Config): void {
   // Profile construction validates the installed catalog loudly: a pi-ai
   // downgrade that dropped a provider fails the boot that asked for it, and
   // a per-model miss is refused per route (see buildOAuthProfile).
-  const profiles = new Map(configured.map(id => [id, buildOAuthProfile(id, overrides[id])]))
+  let profiles = new Map(configured.map(id => [id, buildOAuthProfile(id, overrides[id])]))
   const store = new CredentialFile(config.credentialsFile ?? defaultCredentialsFile())
+  const discovery = new CodexModelDiscovery()
+  const baseCodex = profiles.get('openai-codex')
+  let fallbackUntil = 0
+  let fallbackAccess: string | undefined
+  const prepareCatalog = async (provider: string): Promise<ReadonlySet<string> | undefined> => {
+    if (provider !== 'openai-codex' || baseCodex?.piProvider === undefined) return undefined
+    let credential = asStoredCredential(await store.read(provider))
+    if (credential === undefined) return undefined
+    if (fallbackAccess === credential.access && fallbackUntil > Date.now()) return undefined
+    try {
+      if (credential.expires <= Date.now()) {
+        await store.modify(provider, async current => {
+          const stored = asStoredCredential(current)
+          if (stored === undefined || stored.expires > Date.now()) return current
+          return baseCodex.piProvider!.auth.oauth!.refresh(stored, AbortSignal.timeout(8000))
+        })
+        credential = asStoredCredential(await store.read(provider))
+        if (credential === undefined) return undefined
+      }
+      const discovered = await discovery.discover(credential, baseCodex.piProvider)
+      // A login/logout or account switch during fetch must not install another
+      // account's metadata into this route.
+      if (asStoredCredential(await store.read(provider))?.access !== credential.access) return undefined
+      if (profiles.get(provider)?.piProvider !== discovered.provider) {
+        profiles = new Map(profiles).set(provider, { ...baseCodex, piProvider: discovered.provider })
+      }
+      return discovered.visible
+    } catch {
+      profiles = new Map(profiles).set(provider, baseCodex)
+      fallbackAccess = credential?.access
+      fallbackUntil = Date.now() + 60_000
+      ctx.logger.warn('ChatGPT model metadata unavailable; using the installed catalog temporarily')
+      return undefined
+    }
+  }
 
   // Fail closed on store trouble: a credential file that cannot be read
   // must not surface forty models that would all fail at request time.
@@ -209,7 +254,7 @@ export function apply(ctx: Context, config: Config): void {
     onReplayDegrade: ({ provider, model, reason }) => {
       ctx.logger.warn(`dsh-auth: replay state on assistant history for ${provider}/${model} degraded: ${reason}`)
     },
-  }, hasCredential)
+  }, hasCredential, prepareCatalog)
 
   // The service is a thin holder so UIs can find the api without importing
   // the plugin module; the defensive get-then-create matches how the TUI
