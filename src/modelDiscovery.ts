@@ -51,7 +51,11 @@ export function parseCodexCatalog(value: unknown, provider: PiAiProvider): Disco
       thinkingLevelMap,
     }
     models.set(model.id, model)
-    if (entry.visibility === 'list') visible.add(model.id)
+    // The endpoint may omit visibility for models that are available to the
+    // signed-in account. Only an explicit `hide` should suppress a model from
+    // the picker; requiring exactly `list` silently drops new visibility
+    // states and leaves otherwise usable models undiscoverable.
+    if (entry.visibility !== 'hide') visible.add(model.id)
   }
   if (visible.size === 0) throw new Error('ChatGPT model metadata has no picker-visible models')
   // Older saved sessions may still name a retired model; keep it resolvable,

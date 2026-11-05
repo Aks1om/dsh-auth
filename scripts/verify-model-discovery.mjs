@@ -6,10 +6,11 @@ const provider = buildOAuthProfile('openai-codex').piProvider
 const payload = { models: [
   { slug: 'future-model', display_name: 'Future model', visibility: 'list', context_window: 500000,
     input_modalities: ['text', 'image'], supported_reasoning_levels: [{ effort: 'low' }, { effort: 'max' }] },
+  { slug: 'new-default-visible-model', display_name: 'New default-visible model', context_window: 128000 },
   { slug: 'internal-review', visibility: 'hide', context_window: 272000 },
 ] }
 const parsed = parseCodexCatalog(payload, provider)
-assert.deepEqual([...parsed.visible], ['future-model'])
+assert.deepEqual([...parsed.visible], ['future-model', 'new-default-visible-model'])
 const newModel = parsed.provider.getModels().find(model => model.id === 'future-model')
 assert.equal(newModel.contextWindow, 500000)
 assert.equal(newModel.thinkingLevelMap.max, 'max')
