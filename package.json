@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-harness-tui/dsh-auth",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Subscription OAuth sign-in (ChatGPT/Codex, Claude Pro/Max, SuperGrok) as LLM provider routes for DeepSeek Harness — no dsh source patch, bundled with dsh-tui",
   "license": "MIT",
   "repository": {
@@ -33,7 +33,7 @@
     }
   },
   "engines": {
-    "node": "^22.19 || >=24"
+    "node": ">=24.9.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -42,13 +42,13 @@
     "verify": "npm run build && npm run smoke"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.5",
-    "@deepseek-ai/dsh-attachment": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-commands": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-llm": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-llm-pi-ai": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-user-questions": "0.2.1-rc.2",
-    "@deepseek-ai/schemastery": "~3.18.5"
+    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/dsh-attachment": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-commands": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm-pi-ai": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-user-questions": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "~3.19.0"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-attachment": {
@@ -56,14 +56,14 @@
     }
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.5",
-    "@deepseek-ai/dsh-attachment": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-commands": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-llm": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-llm-pi-ai": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-user-questions": "0.2.1-rc.2",
-    "@deepseek-ai/schemastery": "~3.18.5",
-    "@types/node": "^22.0.0",
+    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/dsh-attachment": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-commands": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm-pi-ai": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-user-questions": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "~3.19.0",
+    "@types/node": "^24.0.0",
     "typescript": "^6.0.3"
   }
 }

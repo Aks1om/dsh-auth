@@ -123,6 +123,8 @@ try {
   ok(profile.piProvider.auth.oauth !== undefined, 'the provider keeps its OAuth flow object')
   ok(typeof profile.piProvider.auth.oauth?.name === 'string', 'the flow carries a display name')
   ok(profile.maxRequestImageBytes === 20 * 1024 * 1024, 'image budgets mirror llm-pi-ai defaults')
+  ok(profile.maxRequestImages === 50 && profile.imageOffloadCountQuantum === 10,
+    'image count and offload quantum mirror llm-pi-ai defaults')
   ok(OAUTH_PROVIDER_IDS.length === 3, `mounted provider set is the expected trio (got ${OAUTH_PROVIDER_IDS.join(',')})`)
   let unknownProvider = ''
   try {
@@ -142,8 +144,10 @@ try {
   const sol = overridden.piProvider.getModels().find(model => model.id === 'gpt-5.6-sol')
   ok(sol?.contextWindow === 1000000, 'modelOverrides contextWindow lands on the target model')
   ok(sol?.maxTokens === solBase?.maxTokens, 'untouched fields keep the installed catalog value')
-  const untouched = overridden.piProvider.getModels().find(model => model.id === 'gpt-5.5')
-  ok(untouched?.contextWindow === solBase?.contextWindow, 'models without an override stay on the catalog value')
+  const untouchedBase = profile.piProvider.getModels().find(model => model.id !== 'gpt-5.6-sol')
+  const untouched = overridden.piProvider.getModels().find(model => model.id === untouchedBase?.id)
+  ok(untouchedBase !== undefined && untouched?.contextWindow === untouchedBase.contextWindow,
+    'models without an override stay on their own catalog value')
   ok(overridden.piProvider.getModels().length === profile.piProvider.getModels().length, 'the model list keeps every catalog entry')
   ok(overridden.piProvider.auth.oauth !== undefined, 'the provider keeps its OAuth flow object under overrides')
   ok(profile.piProvider.getModels().find(model => model.id === 'gpt-5.6-sol')?.contextWindow === solBase?.contextWindow,

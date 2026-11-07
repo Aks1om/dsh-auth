@@ -1,7 +1,7 @@
 /**
  * The pi-ai instance owned by the installed dsh-llm-pi-ai adapter.
  *
- * dsh-llm-pi-ai rc.2 depends on pi-ai 0.82.x while alpha.1 depends on 0.84.x.
+ * dsh-llm-pi-ai owns its pi-ai dependency, which changes across DSH releases.
  * Loading a second catalog from dsh-auth and handing its Provider objects to
  * the adapter crosses package instances and is neither type- nor runtime-safe.
  * Resolve the adapter's own dependency instead, and derive every public type

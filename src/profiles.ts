@@ -38,6 +38,10 @@ export interface ModelOverride {
 
 /** llm-pi-ai `DEFAULT_MAX_REQUEST_IMAGE_BYTES` (20 MiB, base64 payload bound). */
 const MAX_REQUEST_IMAGE_BYTES = 20 * 1024 * 1024
+/** llm-pi-ai `DEFAULT_MAX_REQUEST_IMAGES` (retained image occurrences). */
+const MAX_REQUEST_IMAGES = 50
+/** llm-pi-ai `DEFAULT_IMAGE_OFFLOAD_COUNT_QUANTUM` (oldest images per overflow). */
+const IMAGE_OFFLOAD_COUNT_QUANTUM = 10
 /** llm-pi-ai `DEFAULT_REQUEST_IMAGE_PIXEL_BUDGET` (2048×2048 pixels). */
 const REQUEST_IMAGE_PIXEL_BUDGET = 2048 * 2048
 /** llm-pi-ai `DEFAULT_REQUEST_IMAGE_MAX_BYTES` (1 MiB per image). */
@@ -129,6 +133,8 @@ export function buildOAuthProfile(
     // harmless on a pre-0.1.5 host.
     modelErrors: new Map(),
     maxRequestImageBytes: MAX_REQUEST_IMAGE_BYTES,
+    maxRequestImages: MAX_REQUEST_IMAGES,
+    imageOffloadCountQuantum: IMAGE_OFFLOAD_COUNT_QUANTUM,
     requestImagePixelBudget: REQUEST_IMAGE_PIXEL_BUDGET,
     requestImageMaxBytes: REQUEST_IMAGE_MAX_BYTES,
   }
