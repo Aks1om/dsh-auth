@@ -35,7 +35,7 @@
 
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
@@ -146,24 +146,32 @@ function hostAuthContext(): PiAiAuthContext {
  * next request, and a picker that hid a refreshable provider would look
  * signed-out when it is not.
  */
+interface CatalogOperation { sequence: number; startEpoch: number; epoch?: number; identity?: string }
+
 export class CredentialGatedAdapter extends PiAiAdapter {
   constructor(
     options: PiAiAdapterOptions,
-    private readonly hasCredential: (provider: string) => Promise<boolean>,
-    private readonly prepareCatalog?: (provider: string) => Promise<ReadonlySet<string> | undefined>,
+    private readonly hasCredential: (provider: string, operation?: CatalogOperation) => Promise<boolean>,
+    private readonly prepareCatalog?: (provider: string, operation?: CatalogOperation) => Promise<ReadonlySet<string> | undefined>,
+    private readonly beginCatalog?: (provider: string) => CatalogOperation | undefined,
+    private readonly isCurrentCatalog?: (provider: string, operation?: CatalogOperation) => boolean,
   ) {
     super(options)
   }
 
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
-    if (!(await this.hasCredential(provider))) return []
-    const visible = await this.prepareCatalog?.(provider)
+    const operation = this.beginCatalog?.(provider)
+    if (!(await this.hasCredential(provider, operation)) || this.isCurrentCatalog?.(provider, operation) === false) return []
+    const visible = await this.prepareCatalog?.(provider, operation)
     const models = await super.listModels(provider)
+    if (this.isCurrentCatalog?.(provider, operation) === false) return []
     return visible === undefined ? models : models.filter(model => visible.has(model.id))
   }
 
   override async resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmModelInfo> {
-    await this.prepareCatalog?.(provider)
+    const operation = this.beginCatalog?.(provider)
+    if (operation !== undefined) await this.hasCredential(provider, operation)
+    await this.prepareCatalog?.(provider, operation)
     return super.resolveModel(provider, model, signal)
   }
 }
@@ -195,12 +203,50 @@ export function apply(ctx: Context, config: Config): void {
   const discovery = new CodexModelDiscovery()
   const baseCodex = profiles.get('openai-codex')
   let fallbackUntil = 0
-  let fallbackAccess: string | undefined
-  const prepareCatalog = async (provider: string): Promise<ReadonlySet<string> | undefined> => {
+  let fallbackIdentity: string | undefined
+  let catalogIdentity: string | undefined
+  let sequence = 0
+  let observedSequence = 0
+  let transitionSequence = 0
+  let epoch = 0
+  let observedIdentity: string | undefined
+  const beginCatalog = (provider: string): CatalogOperation | undefined => provider === 'openai-codex' ? { sequence: ++sequence, startEpoch: epoch } : undefined
+  const isCurrentCatalog = (provider: string, operation?: CatalogOperation): boolean => provider !== 'openai-codex'
+    || (operation?.epoch !== undefined && operation.epoch === epoch && operation.identity === observedIdentity)
+  // Match the effective identity used by discovery's in-process cache.
+  const identity = (credential: NonNullable<ReturnType<typeof asStoredCredential>>): string => JSON.stringify([
+    credential.access, credential.accountId, process.env['DSH_AUTH_CREDENTIALS'] ?? '',
+    join(resolve(process.env['DSH_HOME'] || join(homedir(), '.dsh')), 'dsh-auth', 'model-cache'),
+  ])
+  // Sequence orders observations, not calls: equal identities share an epoch.
+  // An older delayed read cannot reverse a newer observed transition, including
+  // logout or A -> B -> A. The store itself exposes no revisioned snapshot.
+  const observe = (operation: CatalogOperation, value: string | undefined): boolean => {
+    const sharedTransition = operation.epoch === undefined && operation.startEpoch + 1 === epoch && value === observedIdentity
+    if ((operation.sequence < transitionSequence && !sharedTransition) || (operation.epoch !== undefined && operation.epoch !== epoch)) return false
+    if (value !== observedIdentity) {
+      if (operation.sequence < observedSequence) return false
+      observedIdentity = value
+      transitionSequence = operation.sequence
+      epoch++
+    }
+    observedSequence = Math.max(observedSequence, operation.sequence)
+    operation.epoch = epoch
+    operation.identity = value
+    return true
+  }
+  const noModels: ReadonlySet<string> = new Set()
+  const prepareCatalog = async (provider: string, operation?: CatalogOperation): Promise<ReadonlySet<string> | undefined> => {
     if (provider !== 'openai-codex' || baseCodex?.piProvider === undefined) return undefined
-    let credential = asStoredCredential(await store.read(provider))
-    if (credential === undefined) return undefined
-    if (fallbackAccess === credential.access && fallbackUntil > Date.now()) return undefined
+    let credential = await store.read(provider).then(asStoredCredential, () => undefined)
+    if (!isCurrentCatalog(provider, operation) || credential === undefined || identity(credential) !== operation?.identity) return noModels
+    let currentIdentity = identity(credential)
+    // Do not reset a published provider based on an asynchronous read alone.
+    // If another identity's catalog is installed during a fallback interval,
+    // suppress picker rows until this identity can be discovered again.
+    if (fallbackIdentity === currentIdentity && fallbackUntil > Date.now()) {
+      return catalogIdentity !== undefined && catalogIdentity !== currentIdentity ? noModels : undefined
+    }
     try {
       if (credential.expires <= Date.now()) {
         await store.modify(provider, async current => {
@@ -208,20 +254,31 @@ export function apply(ctx: Context, config: Config): void {
           if (stored === undefined || stored.expires > Date.now()) return current
           return baseCodex.piProvider!.auth.oauth!.refresh(stored, AbortSignal.timeout(8000))
         })
+        if (!isCurrentCatalog(provider, operation)) return noModels
         credential = asStoredCredential(await store.read(provider))
-        if (credential === undefined) return undefined
+        if (!isCurrentCatalog(provider, operation) || credential === undefined || operation === undefined || !observe(operation, identity(credential))) return noModels
+        currentIdentity = identity(credential)
       }
       const discovered = await discovery.discover(credential, baseCodex.piProvider)
+      if (!isCurrentCatalog(provider, operation)) return noModels
       // A login/logout or account switch during fetch must not install another
       // account's metadata into this route.
-      if (asStoredCredential(await store.read(provider))?.access !== credential.access) return undefined
+      const current = asStoredCredential(await store.read(provider))
+      if (!isCurrentCatalog(provider, operation) || current === undefined || identity(current) !== currentIdentity) return noModels
       if (profiles.get(provider)?.piProvider !== discovered.provider) {
         profiles = new Map(profiles).set(provider, { ...baseCodex, piProvider: discovered.provider })
       }
+      catalogIdentity = currentIdentity
       return discovered.visible
     } catch {
+      // A stale failure must not erase a newer account's installed catalog.
+      if (!isCurrentCatalog(provider, operation)) return noModels
+      const current = await store.read(provider).then(asStoredCredential, () => undefined)
+      if (!isCurrentCatalog(provider, operation) || current === undefined || identity(current) !== currentIdentity) return noModels
+      if (fallbackIdentity === currentIdentity && fallbackUntil > Date.now() && catalogIdentity === undefined) return undefined
       profiles = new Map(profiles).set(provider, baseCodex)
-      fallbackAccess = credential?.access
+      catalogIdentity = undefined
+      fallbackIdentity = currentIdentity
       fallbackUntil = Date.now() + 60_000
       ctx.logger.warn('ChatGPT model metadata unavailable; using the installed catalog temporarily')
       return undefined
@@ -230,9 +287,14 @@ export function apply(ctx: Context, config: Config): void {
 
   // Fail closed on store trouble: a credential file that cannot be read
   // must not surface forty models that would all fail at request time.
-  const hasCredential = async (provider: string): Promise<boolean> => {
+  const hasCredential = async (provider: string, operation?: CatalogOperation): Promise<boolean> => {
     try {
-      return await store.read(provider) !== undefined
+      const stored = await store.read(provider)
+      if (operation !== undefined) {
+        const credential = asStoredCredential(stored)
+        return observe(operation, credential === undefined ? undefined : identity(credential)) && credential !== undefined
+      }
+      return stored !== undefined
     } catch {
       return false
     }
@@ -254,7 +316,7 @@ export function apply(ctx: Context, config: Config): void {
     onReplayDegrade: ({ provider, model, reason }) => {
       ctx.logger.warn(`dsh-auth: replay state on assistant history for ${provider}/${model} degraded: ${reason}`)
     },
-  }, hasCredential, prepareCatalog)
+  }, hasCredential, prepareCatalog, beginCatalog, isCurrentCatalog)
 
   // The service is a thin holder so UIs can find the api without importing
   // the plugin module; the defensive get-then-create matches how the TUI

@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-harness-tui/dsh-auth",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "description": "Subscription OAuth sign-in (ChatGPT/Codex, Claude Pro/Max, SuperGrok) as LLM provider routes for DeepSeek Harness — no dsh source patch, bundled with dsh-tui",
   "license": "MIT",
   "repository": {
